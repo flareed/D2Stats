@@ -813,16 +813,19 @@ func NotifierMain()
 	
 	if (not $pPaths or not $iPaths) then return
 	
-	local $pPath, $pUnit, $pUnitData
-	local $iUnitType, $iClass, $iQuality, $iEarLevel, $iNewEarLevel, $iFlags, $sName, $iTierFlag
+	local $pPath, $pUnit, $pUnitData, $pCurrentUnit
+	local $iUnitType, $iClass, $iUnitId, $iQuality, $iFileIndex, $iEarLevel, $iNewEarLevel, $iFlags, $iTierFlag, $iLvl
 	local $bIsNewItem, $bIsSocketed, $bIsEthereal
-	local $iFlagsTier, $iFlagsQuality, $iFlagsMisc, $iFlagsColour, $iFlagsSound
-	local $bNotify, $sText, $iColor
+	local $iFlagsTier, $iFlagsQuality, $iFlagsMisc, $iFlagsColour, $iFlagsSound, $iFlagsDisplay
+	local $bNotify, $iColor
+	local $sType, $sText, $sStat, $sUniqueTier
 	
 	local $bNotifySuperior = _GUI_Option("notify-superior")
 
-	local $tUnitAny = DllStructCreate("dword iUnitType;dword iClass;dword pad1[3];dword pUnitData;dword pad2[52];dword pUnit;")
-	local $tItemData = DllStructCreate("dword iQuality;dword pad1[5];dword iFlags;dword pad2[11];byte iEarLevel;")
+	local $tUnitAny = DllStructCreate("dword iUnitType;dword iClass;dword pad1;dword dwUnitId;dword pad2;dword pUnitData;dword pad3[52];dword pUnit;")
+	local $tItemData = DllStructCreate("dword iQuality;dword pad1[5];dword iFlags;dword pad2[3];dword dwFileIndex; dword pad2[7];byte iEarLevel;")
+	local $tUniqueItemsTxt = DllStructCreate("dword pad1[13];word wLvl;")
+	local $pUniqueItemsTxt = _MemoryRead($g_pD2sgpt + 0xC24, $g_ahD2Handle)
 	
 	for $i = 0 to $iPaths - 1
 		$pPath = _MemoryRead($pPaths + 4*$i, $g_ahD2Handle)
@@ -832,8 +835,17 @@ func NotifierMain()
 			_WinAPI_ReadProcessMemory($g_ahD2Handle[1], $pUnit, DllStructGetPtr($tUnitAny), DllStructGetSize($tUnitAny), 0)
 			$iUnitType = DllStructGetData($tUnitAny, "iUnitType")
 			$pUnitData = DllStructGetData($tUnitAny, "pUnitData")
+			$iUnitId = DllStructGetData($tUnitAny, "dwUnitId")
 			$iClass = DllStructGetData($tUnitAny, "iClass")
+			$pCurrentUnit = $pUnit
 			$pUnit = DllStructGetData($tUnitAny, "pUnit")
+
+			; iUnitType 1 = monster
+			if(_GUI_Option("goblin-alert")) Then
+				if ($iUnitType == 1 and _ArraySearch($g_goblinIds, $iClass) > -1) then
+					GoblinAlert($iUnitId)
+				endif
+			endif
 			
 			; iUnitType 4 = item
 			if ($iUnitType == 4) then
@@ -841,6 +853,7 @@ func NotifierMain()
 				$iQuality = DllStructGetData($tItemData, "iQuality")
 				$iFlags = DllStructGetData($tItemData, "iFlags")
 				$iEarLevel = DllStructGetData($tItemData, "iEarLevel")
+				$iFileIndex = DllStructGetData($tItemData, "dwFileIndex")
 				
 				; Using the ear level field to check if we've seen this item on the ground before
 				; Resets when the item is picked up or we move too far away
@@ -851,26 +864,33 @@ func NotifierMain()
 				$bIsSocketed = BitAND(0x800, $iFlags) <> 0
 				$bIsEthereal = BitAND(0x400000, $iFlags) <> 0
 				
-				$sName = $g_avNotifyCache[$iClass][0]
+				$sType = $g_avNotifyCache[$iClass][0]
 				$iTierFlag = $g_avNotifyCache[$iClass][1]
 				$sText = $g_avNotifyCache[$iClass][2]
 				
 				$bNotify = False
 				
 				for $j = 0 to UBound($g_avNotifyCompile) - 1
-					if (StringRegExp($sName, $g_avNotifyCompile[$j][$eNotifyFlagsMatch])) then
+					if (StringRegExp($sType, $g_avNotifyCompile[$j][$eNotifyFlagsMatch])) then
 						$iFlagsTier = $g_avNotifyCompile[$j][$eNotifyFlagsTier]
 						$iFlagsQuality = $g_avNotifyCompile[$j][$eNotifyFlagsQuality]
 						$iFlagsMisc = $g_avNotifyCompile[$j][$eNotifyFlagsMisc]
 						$iFlagsColour = $g_avNotifyCompile[$j][$eNotifyFlagsColour]
 						$iFlagsSound = $g_avNotifyCompile[$j][$eNotifyFlagsSound]
+						$iFlagsDisplay = $g_avNotifyCompile[$j][$eNotifyFlagsDisplay]
+
+						if ($iFlagsDisplay == NotifierFlag("name")) then
+							$sText = GetItemName($pCurrentUnit)
+						elseif ($iFlagsDisplay == NotifierFlag("stat")) then
+							$sText = $sText & " " & GetItemStat($pCurrentUnit)
+						endif
 
 						if ($iFlagsTier and not BitAND($iFlagsTier, $iTierFlag)) then continueloop
 						if ($iFlagsQuality and not BitAND($iFlagsQuality, BitRotate(1, $iQuality - 1, "D"))) then continueloop
 						if (not $bIsSocketed and BitAND($iFlagsMisc, NotifierFlag("socket"))) then continueloop
 						
 						if ($bIsEthereal) then
-							$sText &= " (Eth)"
+							$sText = "(Eth) " & $sText
 						elseif (BitAND($iFlagsMisc, NotifierFlag("eth"))) then
 							continueloop
 						endif
@@ -898,7 +918,22 @@ func NotifierMain()
 					
 					if ($bNotifySuperior and $iQuality == $eQualitySuperior) then $sText = "Superior " & $sText
 
-					PrintString("- " & $sText, $iColor)
+					if(_GUI_Option("unique-tier") and $iQuality == 7) Then
+						_WinAPI_ReadProcessMemory($g_ahD2Handle[1], $pUniqueItemsTxt + ($iFileIndex * 0x14c), DllStructGetPtr($tUniqueItemsTxt), DllStructGetSize($tUniqueItemsTxt), 0)
+						$iLvl = DllStructGetData($tUniqueItemsTxt, "wLvl")
+						if($iLvl == 1) Then
+						elseif ($iLvl <= 100) then
+							$sUniqueTier = " {TU} "
+						elseif ($iLvl <= 115) then
+							$sUniqueTier = " {SU} "
+						elseif ($iLvl <= 120) then
+							$sUniqueTier = " {SSU} "
+						elseif ($iLvl <= 130) then
+							$sUniqueTier = " {SSSU} "
+						endif
+					endif
+
+					PrintString("- " & $sUniqueTier & $sText, $iColor)
 					
 					if ($iFlagsSound <> NotifierFlag("sound_none")) then NotifierPlaySound($iFlagsSound)
 				endif
@@ -1230,6 +1265,7 @@ func OnClick_NotifyHelp()
 		'> 0-4 sacred - Item must be one of these tiers.', _
 		'   Tier 0 means untiered items (runes, amulets, etc).', _
 		'> normal superior rare set unique - Item must be one of these qualities.', _
+		'> type name stat - To print type name, real name or full stats.', _
 		'> eth - Item must be ethereal.', _
 		'> white red lime blue gold orange yellow green purple - Notification color.', _
 		StringFormat('> sound[1-%s] - Notification sound.', $g_iNumSounds), _
@@ -1758,6 +1794,26 @@ Func _GetDPI()
 
     Return $avRet
 EndFunc   ;==>_GetDPI
+
+Func GoblinAlert($id)
+	If CheckGoblinHaveSeenBefore($id) Then
+		NotifierPlaySound(6)
+		PrintString("There is a goblin nearby.")
+	EndIf
+EndFunc
+
+Func CheckGoblinHaveSeenBefore($id)
+    If _ArraySearch($g_goblinBuffer, $id) <> -1 Then
+        Return False
+    EndIf
+
+    _ArrayAdd($g_goblinBuffer, $id)
+    If UBound($g_goblinBuffer) > 10 Then
+        _ArrayDelete($g_goblinBuffer, 0)
+    EndIf
+
+    Return True
+EndFunc
 #EndRegion
 
 #Region Injection
@@ -1788,6 +1844,33 @@ func PrintString($sString, $iColor = $ePrintWhite)
 	if (@error) then return _Log("PrintString", "Failed to create remote thread.")
 	
 	return True
+endfunc
+
+func GetItemName($pUnit)
+	if (not IsIngame()) then return ""
+	;~ clean before use
+	_MemoryWrite($g_pD2InjectString, $g_ahD2Handle, 0, "byte[256]")
+	RemoteThread($g_pD2Client_GetItemName, $pUnit)
+	if (@error) then return _Log("GetItemName", "Failed to create remote thread.")
+	return GetOutputString(256)
+endfunc
+
+func GetItemStat($pUnit)
+	if (not IsIngame()) then return ""
+	;~ clean before use
+	_MemoryWrite($g_pD2InjectString, $g_ahD2Handle, 0, "byte[2048]")
+	RemoteThread($g_pD2Client_GetItemStat, $pUnit)
+	if (@error) then return _Log("GetItemStat", "Failed to create remote thread.")
+	return GetOutputString(2048)
+endfunc
+
+func GetOutputString($length)
+	if (not IsIngame()) then return ""
+	local $sString = _MemoryRead($g_pD2InjectString, $g_ahD2Handle, StringFormat("wchar[%s]", $length))
+	if (@error) then return _Log("GetOutputString", "Failed to create remote thread.")
+
+	$sString = StringReplace($sString, @LF, " ")
+	return $sString
 endfunc
 
 func WriteString($sString)
@@ -1975,14 +2058,53 @@ func InjectCode($pWhere, $sCode)
 endfunc
 
 func InjectFunctions()
+#cs 
+	D2Client.dll+CDE00 - 53                    - push ebx
+	D2Client.dll+CDE01 - 68 *                  - push D2Client.dll+CDE20
+	D2Client.dll+CDE06 - 31 C0                 - xor eax,eax
+	D2Client.dll+CDE08 - E8 *                  - call D2Client.dll+7D850
+	D2Client.dll+CDE0D - C3                    - ret 
+#ce
 	local $iPrintOffset = ($g_hD2Client + 0x7D850) - ($g_hD2Client + 0xCDE0D)
 	local $sWrite = "0x5368" & SwapEndian($g_pD2InjectString) & "31C0E8" & SwapEndian($iPrintOffset) & "C3"
 	local $bPrint = InjectCode($g_pD2InjectPrint, $sWrite)
 	
+#cs 
+	D2Client.dll+CDE10 - 8B CB                 - mov ecx,ebx
+	D2Client.dll+CDE12 - 31 C0                 - xor eax,eax
+	D2Client.dll+CDE14 - BB *                  - mov ebx,D2Lang.dll+9450
+	D2Client.dll+CDE19 - FF D3                 - call ebx
+	D2Client.dll+CDE1B - C3                    - ret 
+#ce
 	$sWrite = "0x8BCB31C0BB" & SwapEndian($g_hD2Lang + 0x9450) & "FFD3C3"
 	local $bGetString = InjectCode($g_pD2InjectGetString, $sWrite)
+	
+#cs 
+	D2Client.dll+CDE20 - 68 00010000           - push 00000100
+	D2Client.dll+CDE25 - 68 *                  - push D2Client.dll+CDEF0
+	D2Client.dll+CDE2A - 53                    - push ebx
+	D2Client.dll+CDE2B - E8 *                  - call D2Client.dll+914F0
+	D2Client.dll+CDE30 - C3                    - ret 
+#ce
+	local $iIDWNT = ($g_hD2Client + 0x914F0) - ($g_hD2Client + 0xCDE30)
+	$sWrite = "0x680001000068" & SwapEndian($g_pD2InjectString) & "53E8" & SwapEndian($iIDWNT) & "C3"
+	local $bGetItemName = InjectCode($g_pD2Client_GetItemName, $sWrite)
 
-	return $bPrint and $bGetString
+#cs 
+	D2Client.dll+CDE40 - 57                    - push edi
+	D2Client.dll+CDE41 - BF *                  - mov edi,D2Client.dll+CDEF0
+	D2Client.dll+CDE43 - 6A 00                 - push 00
+	D2Client.dll+CDE45 - 6A 01                 - push 01
+	D2Client.dll+CDE47 - 53                    - push ebx
+	D2Client.dll+CDE4B - E8 *                  - call D2Client.QueryInterface+A240
+	D2Client.dll+CDE50 - 5F                    - pop edi
+	D2Client.dll+CDE51 - C3                    - ret 
+#ce
+	local $iIDWNTT = ($g_hD2Client + 0x560B0) - ($g_hD2Client + 0xCDE50)
+	$sWrite = "0x57BF" & SwapEndian($g_pD2InjectString) & "6A006A0153E8" & SwapEndian($iIDWNTT) & "5FC3"
+	local $bGetItemStat = InjectCode($g_pD2Client_GetItemStat, $sWrite)
+
+	return $bPrint and $bGetString and $bGetItemName and $bGetItemStat
 endfunc
 
 func UpdateDllHandles()
@@ -2011,7 +2133,10 @@ func UpdateDllHandles()
 	local $pD2Inject = $g_hD2Client + 0xCDE00
 	$g_pD2InjectPrint = $pD2Inject + 0x0
 	$g_pD2InjectGetString = $pD2Inject + 0x10
-	$g_pD2InjectString = $pD2Inject + 0x20
+	$g_pD2Client_GetItemName = $pD2Inject + 0x20;
+	$g_pD2Client_GetItemStat = $pD2Inject + 0x40;
+	;~ make more room for full item description
+	$g_pD2InjectString = _MemVirtualAllocEx($g_ahD2Handle[1], 0, 0x1000, BitOR($MEM_COMMIT, $MEM_RESERVE), $PAGE_EXECUTE_READWRITE)
 	
 	$g_pD2sgpt = _MemoryRead($g_hD2Common + 0x99E1C, $g_ahD2Handle)
 
@@ -2042,14 +2167,15 @@ func DefineGlobals()
 	global $g_avGUI[256][3] = [[0]]			; Text, X, Control [0] Count
 	global $g_avGUIOption[32][3] = [[0]]	; Option, Control, Function [0] Count
 	
-	global enum $eNotifyFlagsTier, $eNotifyFlagsQuality, $eNotifyFlagsMisc, $eNotifyFlagsNoMask, $eNotifyFlagsColour, $eNotifyFlagsSound, $eNotifyFlagsMatch, $eNotifyFlagsLast
+	global enum $eNotifyFlagsTier, $eNotifyFlagsQuality, $eNotifyFlagsMisc, $eNotifyFlagsNoMask, $eNotifyFlagsColour, $eNotifyFlagsSound, $eNotifyFlagsDisplay, $eNotifyFlagsMatch, $eNotifyFlagsLast
 	global $g_asNotifyFlags[$eNotifyFlagsLast][32] = [ _
 		[ "0", "1", "2", "3", "4", "sacred" ], _
 		[ "low", "normal", "superior", "magic", "set", "rare", "unique", "craft", "honor" ], _
 		[ "eth", "socket" ], _
 		[], _
 		[ "clr_none", "white", "red", "lime", "blue", "gold", "grey", "black", "clr_unk", "orange", "yellow", "green", "purple", "show", "hide" ], _
-		[ "sound_none" ] _
+		[ "sound_none" ], _
+		[ "type", "name", "stat"] _
 	]
 	
 	global const $g_iNumSounds = 6 ; Max 31
@@ -2076,13 +2202,13 @@ func DefineGlobals()
 	
 	global $g_iD2pid, $g_iUpdateFailCounter
 
-	global $g_pD2sgpt, $g_pD2InjectPrint, $g_pD2InjectString, $g_pD2InjectGetString
+	global $g_pD2sgpt, $g_pD2InjectPrint, $g_pD2InjectString, $g_pD2InjectGetString, $g_pD2Client_GetItemName, $g_pD2Client_GetItemStat
 
 	global $g_bHotkeysEnabled = False
 	global $g_hTimerCopyName = 0
 	global $g_sCopyName = ""
 
-	global const $g_iGUIOptionsGeneral = 4
+	global const $g_iGUIOptionsGeneral = 6
 	global const $g_iGUIOptionsHotkey = 6
 
 	global const $g_sNotifyTextDefault = BinaryToString("0x3120322033203420756E69717565202020202020202020202020202020232054696572656420756E69717565730D0A73616372656420756E6971756520202020202020202020202020202020232053616372656420756E69717565730D0A2252696E67247C416D756C6574247C4A6577656C2220756E69717565202320556E69717565206A6577656C72790D0A225175697665722220756E697175650D0A7365740D0A2242656C6C61646F6E6E61220D0A22536872696E65205C28313022202020202020202020202020202020202320536872696E65730D0A23225175697665722220726172650D0A232252696E67247C416D756C6574222072617265202020202020202020202320526172652072696E677320616E6420616D756C6574730D0A2373616372656420657468207375706572696F7220726172650D0A0D0A225369676E6574206F66204C6561726E696E67220D0A2247726561746572205369676E6574220D0A22456D626C656D220D0A2254726F706879220D0A224379636C65220D0A22456E6368616E74696E67220D0A2257696E6773220D0A2252756E6573746F6E657C457373656E63652422202320546567616E7A652072756E65730D0A2247726561742052756E6522202020202020202020232047726561742072756E65730D0A224F72625C7C2220202020202020202020202020202320554D4F730D0A224F696C206F6620436F6E6A75726174696F6E220D0A2244696D656E73696F6E616C204B6579220D0A224F6363756C7420456666696779220D0A224D797374696320447965220D0A2252656C6963220D0A225175657374204974656D220D0A232252696E67206F66207468652046697665220D0A0D0A232048696465206974656D730D0A686964652031203220332034206C6F77206E6F726D616C207375706572696F72206D6167696320726172650D0A6869646520225E2852696E677C416D756C6574292422206D616769630D0A68696465202251756976657222206E6F726D616C206D616769630D0A6869646520225E28416D6574687973747C546F70617A7C53617070686972657C456D6572616C647C527562797C4469616D6F6E647C536B756C6C7C4F6E79787C426C6F6F6473746F6E657C54757271756F6973657C416D6265727C5261696E626F772053746F6E652924220D0A6869646520225E466C61776C657373220D0A73686F77202228477265617465727C537570657229204865616C696E6720506F74696F6E220D0A686964652022284865616C696E677C4D616E612920506F74696F6E220D0A6869646520225E4B657924220D0A6869646520225E28456C7C456C647C5469727C4E65667C4574687C4974687C54616C7C52616C7C4F72747C5468756C7C416D6E7C536F6C7C536861656C7C446F6C7C48656C7C496F7C4C756D7C4B6F7C46616C7C4C656D7C50756C7C556D7C4D616C7C4973747C47756C7C5665787C4F686D7C4C6F7C5375727C4265727C4A61687C4368616D7C5A6F64292052756E652422")
@@ -2091,6 +2217,8 @@ func DefineGlobals()
 		["mousefix", 0, "cb", "Continue attacking when monster dies under cursor"], _
 		["notify-enabled", 1, "cb", "Enable notifier"], _
 		["notify-superior", 0, "cb", "Notifier prefixes superior items with 'Superior'"], _
+		["goblin-alert", 1, "cb", "Play sound (sound 6) when goblins are nearby."], _
+		["unique-tier", 1, "cb", "Show sacred tier of unique (SU/SSU/SSSU)"], _
 		["copy", 0x002D, "hk", "Copy item text", "HotKey_CopyItem"], _
 		["copy-name", 0, "cb", "Only copy item name"], _
 		["filter", 0x0124, "hk", "Inject/eject DropFilter", "HotKey_DropFilter"], _
@@ -2100,5 +2228,7 @@ func DefineGlobals()
 		["notify-text", $g_sNotifyTextDefault, "tx"], _
 		["selectedNotifierRulesName", "Default", "tx"] _
 	]
+	global $g_goblinIds = [2774, 2775, 2776, 2777, 2778, 2779, 2780, 2781, 2784, 2785, 2786, 2787, 2788, 2789, 2790, 2791, 2792, 2793, 2794, 2795, 2799, 2802, 2803, 2805]
+	global $g_goblinBuffer[] = []
 endfunc
 #EndRegion
