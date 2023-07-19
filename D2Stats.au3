@@ -879,16 +879,19 @@ func NotifierMain()
 						$iFlagsSound = $g_avNotifyCompile[$j][$eNotifyFlagsSound]
 						$iFlagsDisplay = $g_avNotifyCompile[$j][$eNotifyFlagsDisplay]
 
+						; <original <pos>
+
+						if ($iFlagsTier and not BitAND($iFlagsTier, $iTierFlag)) then continueloop
+						if ($iFlagsQuality and not BitAND($iFlagsQuality, BitRotate(1, $iQuality - 1, "D"))) then continueloop
+						if (not $bIsSocketed and BitAND($iFlagsMisc, NotifierFlag("socket"))) then continueloop
+
+						; moved from <original pos> above
 						if ($iFlagsDisplay == NotifierFlag("name")) then
 							$sText = GetItemName($pCurrentUnit)
 						elseif ($iFlagsDisplay == NotifierFlag("stat")) then
 							$sText = $sText & " " & GetItemStat($pCurrentUnit)
 						endif
 
-						if ($iFlagsTier and not BitAND($iFlagsTier, $iTierFlag)) then continueloop
-						if ($iFlagsQuality and not BitAND($iFlagsQuality, BitRotate(1, $iQuality - 1, "D"))) then continueloop
-						if (not $bIsSocketed and BitAND($iFlagsMisc, NotifierFlag("socket"))) then continueloop
-						
 						if ($bIsEthereal) then
 							$sText = "(Eth) " & $sText
 						elseif (BitAND($iFlagsMisc, NotifierFlag("eth"))) then
