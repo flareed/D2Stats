@@ -1,7 +1,1 @@
-# D2Stats
-
-Reads Diablo II stats from the game.
-
-![D2Stats window screenshot](Assets/screenshot.png "D2Stats window screenshot")
-____
-**Run D2Stats as an administrator!**
+Purpose of the fork: to fix synonymouse item name showing when not the correct item 
